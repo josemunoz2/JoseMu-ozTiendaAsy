@@ -169,38 +169,48 @@ public class FirebaseService {
             }
             productosProcesados.add(productoId);
     
-            // Buscar relación proveedor-producto
-            CollectionReference relaciones = db.collection("proveedor-producto");
-            Query query = relaciones.whereEqualTo("productoId", productoId);
-            ApiFuture<QuerySnapshot> future = query.get();
-            List<QueryDocumentSnapshot> documentos = future.get().getDocuments();
-    
-            if (documentos.isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No se encontró proveedor para el producto: " + productoId);
+            
+            
+            // Obtener el producto desde Firestore
+            DocumentReference productoRef = db.collection(COLLECTION_PRODUCTOS).document(productoId);
+            DocumentSnapshot productoSnap = productoRef.get().get();
+            if (!productoSnap.exists()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado: " + productoId);
             }
-    
-            QueryDocumentSnapshot doc = documentos.get(0);
-            String docId = doc.getId();
-            DocumentSnapshot snapshot = db.collection("proveedor-producto").document(docId).get().get();
-            ProveedorProducto proveedorProducto = snapshot.toObject(ProveedorProducto.class);
-    
-            if (proveedorProducto == null || proveedorProducto.getStock() < cantidad) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock insuficiente o relación inválida para producto: " + productoId);
+
+            // Extraer el precio del producto de forma segura
+            Double precio = productoSnap.contains("precio") ? productoSnap.getDouble("precio") : null;
+            if (precio == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El producto no tiene precio definido: " + productoId);
             }
+
+            // Asignar precio unitario y calcular subtotal
+            detalle.setPrecioUnitario(precio);
+            totalCalculado += precio * cantidad;
+            // Restar stock directamente del producto
+// Buscar la relación proveedor-producto por productoId
+CollectionReference relaciones = db.collection("proveedor-producto");
+Query query = relaciones.whereEqualTo("productoId", productoId);
+List<QueryDocumentSnapshot> documentos = query.get().get().getDocuments();
+
+if (documentos.isEmpty()) {
+    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No se encontró proveedor con stock para el producto: " + productoId);
+}
+
+QueryDocumentSnapshot doc = documentos.get(0);
+ProveedorProducto proveedorProducto = doc.toObject(ProveedorProducto.class);
+
+if (proveedorProducto == null || proveedorProducto.getStock() < cantidad) {
+    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Stock insuficiente para el producto: " + productoId);
+}
+
+// Descontar y actualizar stock
+proveedorProducto.setStock(proveedorProducto.getStock() - cantidad);
+db.collection("proveedor-producto").document(proveedorProducto.getId()).set(proveedorProducto);
+
     
-            // Mostrar info para depuración
-            System.out.println("Producto: " + productoId + ", cantidad pedida: " + cantidad + ", stock actual: " + proveedorProducto.getStock());
-    
-            // Setear precio unitario y calcular total
-            double precioUnitario = proveedorProducto.getPrecioCompra();
-            detalle.setPrecioUnitario(precioUnitario);
-    
-            double subtotal = precioUnitario * cantidad;
-            totalCalculado += subtotal;
-    
-            // Restar stock y actualizar
-            proveedorProducto.setStock(proveedorProducto.getStock() - cantidad);
-            db.collection("proveedor-producto").document(docId).set(proveedorProducto);
+
+            
         }
     
         boleta.setTotal(totalCalculado);
